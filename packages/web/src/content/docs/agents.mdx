@@ -104,6 +104,21 @@ A fast, read-only agent for exploring codebases. Cannot modify files. Use this w
 
 ---
 
+## ReAct 框架实现（Reason + Act）
+
+OpenCode 的对话循环遵循 ReAct 思路：先“推理”再“行动”，并把行动结果继续作为上下文反馈给模型。
+
+- **推理流（Reason）**：`session/processor.ts` 监听 `reasoning-start/delta/end` 事件，将模型的思考过程写入 `ReasoningPart`，支持带 `<think>` 的思维链输出。
+- **工具执行（Act）**：同一处理器对 `tool-call/input/result/error` 事件建模为 `ToolPart`，记录输入、输出、时间与元数据。
+- **循环控制（React）**：`session/prompt.ts` 的 `loop` 函数在用户与助手消息之间迭代，直到助手返回非 `tool-calls/unknown` 的完成标记才退出。
+- **特殊防护**：
+  - **Doom loop 检测**：连续 3 次相同工具相同参数会触发权限询问，防止无限调用。
+  - **上下文压缩**：`SessionCompaction` 自动在上下文超限时压缩历史，避免 token 爆炸。
+  - **步数上限**：`maxSteps` 触发专用提示，强制模型给出总结而非继续调工具。
+  - **任务拆分**：`Subtask`/`TaskTool` 支持子代理执行，执行结果同样通过工具流回填。
+
+---
+
 ## Configure
 
 You can customize the built-in agents or create your own through configuration. Agents can be configured in two ways:
