@@ -85,6 +85,37 @@ OpenCode 内置两种 Agent，可用 `Tab` 键快速切换：
 
 了解更多 [Agents](https://opencode.ai/docs/agents) 相关信息。
 
+### 产品架构
+
+```mermaid
+flowchart LR
+  subgraph Clients[客户端]
+    TUI["终端 TUI（opencode）"]
+    Desktop["桌面应用"]
+    IDE["IDE 插件"]
+    Web["Web 控制台"]
+  end
+
+  subgraph Server["OpenCode Server / API"]
+    Agent["AI Agents（build / plan / general）"]
+    Session["项目与会话管理"]
+    Tools["工具层：命令执行、文件系统、VCS、LSP/MCP"]
+    SDK["OpenAPI / SDK 生成"]
+  end
+
+  subgraph Providers["模型与服务提供商"]
+    Zen["OpenCode Zen"]
+    External["OpenAI / Claude / Google / 本地模型"]
+  end
+
+  Clients -->|"HTTP / WebSocket"| Server
+  Server --> Agent
+  Agent --> Tools
+  Agent --> Providers
+  Server --> SDK
+  SDK --> Clients
+```
+
 ### 文档
 
 更多配置说明请查看我们的 [**官方文档**](https://opencode.ai/docs)。
