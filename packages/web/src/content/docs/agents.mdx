@@ -139,6 +139,169 @@ Hidden system agent that creates session summaries. It runs automatically and is
 
 ---
 
+## ReAct Framework Implementation
+
+OpenCode implements the ReAct (Reasoning + Acting) framework through a sophisticated multi-layer architecture that coordinates reasoning, tool execution, and context management. The core loop continuously alternates between model reasoning and tool execution until a final answer is produced.
+
+### Core Components
+
+**1. Session Loop (`session/prompt.ts`)**
+
+The main conversation loop orchestrates the entire ReAct cycle:
+
+```typescript
+while (true) {
+  // Check exit condition: stop when assistant finishes without tool calls
+  if (lastAssistant?.finish && 
+      !["tool-calls", "unknown"].includes(lastAssistant.finish)) {
+    break
+  }
+  
+  // Process next step
+  await processor.process({...})
+}
+```
+
+The loop only exits when the assistant produces a `finish` status that's neither `tool-calls` nor `unknown`, ensuring the model provides a complete answer rather than leaving tool calls pending.
+
+**2. Stream Processor (`session/processor.ts`)**
+
+Processes the streaming response from the LLM and captures different types of output:
+
+- **Reasoning capture**: Listens to `reasoning-start/delta/end` events to build `ReasoningPart` objects containing the model's thought process (supports thinking tags like `<think>`)
+- **Tool execution tracking**: Converts `tool-call/input/result/error` events into `ToolPart` objects with complete metadata (input, output, timing, status)
+- **State management**: Tracks tool execution states (`pending → running → completed/error`)
+
+**3. Message History**
+
+Each iteration processes:
+- All previous user and assistant messages
+- Tool results from previous iterations
+- Reasoning traces
+- Context from compacted sessions
+
+The model receives tool results as part of the conversation history, enabling it to reason about outcomes and decide next actions.
+
+### Safety Mechanisms
+
+OpenCode implements multiple safeguards to prevent common agent failure modes:
+
+**Doom Loop Detection**
+
+Detects when the agent repeatedly calls the same tool with identical parameters:
+
+```typescript
+const DOOM_LOOP_THRESHOLD = 3
+
+// Check last 3 tool calls
+if (lastThree.every(p => 
+  p.tool === currentTool && 
+  JSON.stringify(p.input) === JSON.stringify(currentInput)
+)) {
+  // Trigger permission request to break the loop
+  await PermissionNext.ask({permission: "doom_loop", ...})
+}
+```
+
+**Maximum Steps Enforcement**
+
+When `maxSteps` is configured for an agent, the framework injects a special system message after the limit:
+
+```
+CRITICAL - MAXIMUM STEPS REACHED
+Tools are disabled until next user input. Respond with text only.
+
+Response must include:
+- Statement that maximum steps have been reached
+- Summary of work accomplished
+- List of remaining tasks
+- Recommendations for next steps
+```
+
+**Context Overflow Handling**
+
+Automatic compaction prevents context window overflow:
+
+```typescript
+// After each step, check token usage
+if (await SessionCompaction.isOverflow({tokens, model})) {
+  // Trigger compaction process
+  await SessionCompaction.create({sessionID, agent, model, auto: true})
+}
+```
+
+Compaction uses a specialized agent to summarize conversation history, preserving key information while reducing token count. The system also prunes old tool outputs (keeping the last 40K tokens worth) to maintain context efficiency.
+
+**Tool Output Pruning**
+
+Beyond full compaction, OpenCode incrementally prunes old tool outputs:
+- Keeps the most recent ~40K tokens of tool results
+- Protects critical tools (like `skill`) from pruning
+- Marks pruned parts with `compacted: timestamp`
+
+### Advanced Features
+
+**Subtask Execution**
+
+The framework supports hierarchical task decomposition through `SubtaskPart` and the `TaskTool`:
+
+```typescript
+// Subtasks are queued as special parts
+{
+  type: "subtask",
+  agent: "explore",  // Which subagent to invoke
+  prompt: "Search for authentication code",
+  description: "Find auth implementation"
+}
+
+// The loop detects pending subtasks and executes them
+// Results flow back as regular tool outputs
+```
+
+**Reasoning Part Streaming**
+
+For models that support extended thinking, reasoning content streams incrementally:
+
+```typescript
+case "reasoning-delta":
+  const part = reasoningMap[value.id]
+  part.text += value.text
+  await Session.updatePart({part, delta: value.text})
+```
+
+This enables real-time display of model reasoning while maintaining a complete audit trail.
+
+**Error Recovery**
+
+The processor includes retry logic for transient failures:
+- Exponential backoff for network errors
+- Up to 4 retries with delays: 4s, 8s, 16s, 32s
+- Graceful degradation on persistent failures
+
+### Data Flow
+
+```
+User Input
+  ↓
+[Session Loop Start]
+  ↓
+Model Reasoning (ReasoningPart captured)
+  ↓
+Tool Calls (ToolPart created with input)
+  ↓
+Tool Execution (output/error recorded)
+  ↓
+[Loop continues with tool results in context]
+  ↓
+Model produces final answer (no more tool calls)
+  ↓
+[Loop exits]
+```
+
+Each iteration enriches the context with tool results, enabling the model to refine its approach based on actual execution outcomes—the essence of the ReAct pattern.
+
+---
+
 ## Configure
 
 You can customize the built-in agents or create your own through configuration. Agents can be configured in two ways:
